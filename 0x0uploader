@@ -1,0 +1,161 @@
+#!/usr/bin/env sh
+
+################################################################################
+# 0x0Uploader                                                                  #
+# Copyright (C) 2022-2024 MorsMortium                                          #
+#                                                                              #
+# This program is free software: you can redistribute it and/or modify         #
+# it under the terms of the GNU General Public License as published by         #
+# the Free Software Foundation, either version 3 of the License, or            #
+# (at your option) any later version.                                          #
+#                                                                              #
+# This program is distributed in the hope that it will be useful,              #
+# but WITHOUT ANY WARRANTY; without even the implied warranty of               #
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the                #
+# GNU General Public License for more details.                                 #
+#                                                                              #
+# You should have received a copy of the GNU General Public License            #
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.        #
+################################################################################
+
+# Text of -h --help option
+Help="Usage: 0x0uploader [OPTION] PATH/URL\n\
+Uploader for the 0x0 file sharing service.\n\n\
+Examples:\n\
+ 0x0uploader ./TextFile.txt\n\
+ 0x0uploader -s verylongurl.org\n\
+ 0x0uploader --short verylongurl.org\n\
+ 0x0uploader -i 0x0.st\n\
+ 0x0uploader -i\n\
+ 0x0uploader --instance 0x0.st\n\
+ 0x0uploader --instance\n\n\
+Options:\n\
+ -s --short Shorten url instead of uploading file\n\
+ -i --instance Set or Get 0x0 instance instead of uploading file\n\
+ -v --version Display version information\n\
+ -h --help Display this help message"
+
+# Default empty data and no url shortening
+Data=""
+Operation="upload"
+
+if [ "$#" -gt 0 ]; then
+    # If there is at least one argument
+
+    # Read the options
+    TEMP=$(getopt -o vhs:i --long version,help,short:,instance -- "$@")
+    if [ $? != 0 ]; then
+        echo "Error parsing options" >&2
+        exit 1
+    fi
+    eval set -- "$TEMP"
+
+    # Extract options and their arguments into variables
+    while true; do
+        case "$1" in
+            -v|--version)
+                # Print version information
+                echo "0x0Uploader 1.1 Copyright (C) 2022-2023 MorsMortium"
+                exit ;;
+            -h|--help)
+                # Print help message
+                echo "$Help"
+                exit ;;
+            -s|--short)
+                # Get data for url shortening
+                Data=$2
+                Operation="short"
+                shift 2 ;;
+            -i|--instance)
+                # Get data for instance setting
+                Operation="instance"
+                shift ;;
+            --)
+                shift
+                break ;;
+            *)
+                echo "Invalid option: $1" >&2
+                exit 1 ;;
+        esac
+    done
+
+    if [ -n "$1" ]; then
+        Data=$1
+    fi
+fi
+
+if [ -z "$Data" ] && [ "$Operation" != "instance" ]; then
+    # If Data is empty and Operation is not instance, exit
+    exit
+fi
+
+# Get XDG config directory
+Config=$XDG_CONFIG_HOME
+if [ -z "$Config" ]; then
+    Config=$HOME/.config
+fi
+
+# Name of app
+AppName=0x0Uploader
+
+# Get our own folder, create it if needed
+Config=$Config/$AppName
+mkdir -p "$Config"
+
+# Initial instance, file containing set instance
+Instance=0x0.st
+InstanceFile=$Config/Instance
+
+# Get or set instance
+if [ -f "$InstanceFile" ]; then
+    Instance=$(cat "$InstanceFile")
+else
+    echo "$Instance" > "$InstanceFile"
+fi
+
+if [ "$Operation" = "instance" ]; then
+    # If Operation is instance, do operation, print result
+    if [ -z "$Data" ] && [ -f "$InstanceFile" ]; then
+        # If Data is empty, read instance file
+        echo "Current instance: $(cat "$InstanceFile")"
+    else
+        # Set instance
+        echo "$Data" > "$InstanceFile"
+        echo "Set to instance: $Data"
+    fi
+    exit
+fi
+
+if [ "$Operation" = "upload" ]; then
+    # If operation is upload, try uploading it as file
+    Output=$(curl -sSF "file=@$Data" "https://$Instance" 2>&1)
+else
+    # Try shortening it
+    Output=$(curl -sSF "shorten=$Data" "https://$Instance" 2>&1)
+    if [ "$Output" = "Segmentation fault" ]; then
+        # Bad url error, formatted for later find
+        Output="curl: ()Wrong url provided"
+    fi
+fi
+
+# Make pretty messages from both curl errors and successful uploads
+if echo "$Output" | grep -q "curl: ("; then
+    Output="Error: $(echo "$Output" | cut -d ')' -f 2-)"
+else
+    # Also copy the url into the clipboard (both X and Wayland)
+    # No errors on cross try or TTY
+    echo "$Output" | xclip -selection clipboard > /dev/null 2>&1
+    echo "$Output" | wl-copy > /dev/null 2>&1
+
+    if [ "$Operation" = "upload" ]; then
+        # Upload output
+        Output="File uploaded, url: $Output"
+    else
+        # Shorten output
+        Output="Url shortened, url: $Output"
+    fi
+fi
+
+# Print/notify final message
+echo "$AppName: $Output"
+notify-send -a "$AppName" -i 0x0uploader "$Output" > /dev/null 2>&1
